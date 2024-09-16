@@ -1,81 +1,56 @@
-pipeline {
-    agent {
-        kubernetes {
-            label 'buildah-agent'
-            defaultContainer 'buildah'
-            yaml '''
-            apiVersion: v1
-            kind: Pod
-            metadata:
-              name: buildah-agent
-              labels:
-                app: jenkins
-            spec:
-              containers:
-                - name: buildah
-                  image: quay.io/buildah/stable:latest  # or use your custom Buildah image
-                  command:
-                    - cat
-                  tty: true
-                  resources:
-                    requests:
-                      memory: "2Gi"
-                      cpu: "1"
-                    limits:
-                      memory: "4Gi"
-                      cpu: "2"
-                  volumeMounts:
-                    - name: workspace
-                      mountPath: /workspace
-              volumes:
-                - name: workspace
-                  emptyDir: {}
-            '''
-        }
+ agent {
+    kubernetes {
+      yaml '''
+apiVersion: v1
+kind: Pod
+metadata:
+  name: buildah
+spec:
+  containers:
+  - name: buildah
+    image: quay.io/buildah/stable:v1.23.1
+    command:
+    - cat
+    tty: true
+    securityContext:
+      privileged: true
+    volumeMounts:
+      - name: varlibcontainers
+        mountPath: /var/lib/containers
+  volumes:
+    - name: varlibcontainers
+'''   
     }
-
-    environment {
-        BUILD_IMAGE_NAME = 'your-image-name'
-        BUILD_IMAGE_TAG = 'latest'
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '10'))
+    durabilityHint('PERFORMANCE_OPTIMIZED')
+    disableConcurrentBuilds()
+  }
+  environment {
+    DH_CREDS=credentials('')
+  }
+  stages {
+    stage('Build with Buildah') {
+      steps {
+        container('buildah') {
+          sh 'buildah build -t darinpope/jenkins-example-buildah:8.5-230 .'
+        }
+      }
     }
-
-    stages {
-        stage('Checkout Code') {
-            steps {
-                // Checkout the source code from your repository
-                checkout scm
-            }
+    stage('Login to Docker Hub') {
+      steps {
+        container('buildah') {
+          sh 'echo $DH_CREDS_PSW | buildah login -u $DH_CREDS_USR --password-stdin docker.io'
         }
-
-        stage('Build Container Image with Buildah') {
-            steps {
-                container('buildah') {
-                    // Run Buildah commands inside the Buildah container
-                    sh '''
-                    cd /workspace
-                    buildah bud -t ${BUILD_IMAGE_NAME}:${BUILD_IMAGE_TAG} .
-                    '''
-                }
-            }
-        }
+      }
     }
-
-    post {
-        always {
-            // Clean up actions, if necessary
-            container('buildah') {
-                sh '''
-                buildah rmi ${BUILD_IMAGE_NAME}:${BUILD_IMAGE_TAG}
-                '''
-            }
-        }
-
-        success {
-            echo 'Buildah build succeeded!'
-        }
-
-        failure {
-            echo 'Buildah build failed.'
-        }
+  }
+  post {
+    always {
+      container('buildah') {
+        sh 'buildah logout docker.io'
+      }
     }
+  }
 }
